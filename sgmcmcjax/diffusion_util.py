@@ -12,7 +12,7 @@ map = safe_map
 
 
 def diffusion_factory(
-    is_palindrome: Optional[bool] = False, is_sghmc: Optional[bool] = False
+    is_palindrome: Optional[bool] = False, is_sghmc: Optional[bool] = False, is_pgsgld: Optional[bool] = False
 ) -> Callable:
     """Diffusion factory
     Returns a decorator to make a diffusion factory work on PyTrees
@@ -82,6 +82,32 @@ def diffusion_factory(
                 params = map(get_params, states)
                 return tree_unflatten(tree, params)
 
+            if is_pgsgld:
+                @functools.wraps(update)
+                def tree_update(i, key, grad_tree, precond, sampler_state):
+                    states_flat, tree, subtrees = sampler_state
+                    grad_flat, tree2 = tree_flatten(grad_tree)
+                    precond_flat, tree3 = tree_flatten(precond)
+                    if tree2 != tree != tree3:
+                        msg = (
+                            "sampler update function was passed a gradient tree that did "
+                            "not match the parameter tree structure with which it was "
+                            "initialized: parameter tree {} and grad tree {}."
+                        )
+                        raise TypeError(msg.format(tree, tree2))
+                    states = map(tree_unflatten, subtrees, states_flat)
+                    keys = random.split(key, len(states))
+                    new_states = map(partial(update, i), keys, grad_flat, precond_flat, states)
+                    new_states_flat, subtrees2 = unzip2(map(tree_flatten, new_states))
+                    for subtree, subtree2 in zip(subtrees, subtrees2):
+                        if subtree2 != subtree:
+                            msg = (
+                                "sampler update function produced an output structure that "
+                                "did not match its input structure: input {} and output {}."
+                            )
+                            raise TypeError(msg.format(subtree, subtree2))
+                    return DiffusionState(new_states_flat, tree, subtrees)
+
             if is_sghmc:
 
                 @functools.wraps(resample_momentum)
@@ -143,3 +169,4 @@ def diffusion_factory(
 diffusion = diffusion_factory()
 diffusion_sghmc = diffusion_factory(is_sghmc=True)
 diffusion_palindrome = diffusion_factory(is_palindrome=True)
+diffusion_pgsgld = diffusion_factory(is_pgsgld=True)

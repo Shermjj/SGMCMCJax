@@ -41,7 +41,7 @@ from typing import Callable, Tuple, Union
 import jax.numpy as jnp
 from jax import lax, random
 
-from .diffusion_util import diffusion, diffusion_palindrome, diffusion_sghmc
+from .diffusion_util import diffusion, diffusion_palindrome, diffusion_sghmc, diffusion_pgsgld
 
 
 @diffusion
@@ -72,6 +72,96 @@ def sgld(dt) -> Tuple[Callable, Callable, Callable]:
 
     return init_fn, update, get_params
 
+
+@diffusion_pgsgld
+def pgsgld(
+    dt
+) -> Tuple[Callable, Callable, Callable]:
+    """Preconditioned (General) SGLD diffusion, or specifically Stochastic Gradient Riemannian Langevin Dynamics (SGRLD)
+
+    Mark Girolami and Ben Calderhead. Riemann manifold Langevin and Hamiltonian Monte Carlo methods. Journal of the Royal Statistical Society: Series B (Statistical Methodology), 73(2):123–214, 2011
+
+    Args:
+        dt ([type]): step size
+
+    Returns:
+        Tuple[Callable, Callable, Callable]: An (init_fun, update_fun, get_params) triple.
+    """
+    dt = make_schedule(dt)
+
+    def init_fn(x):
+        return x
+
+    def update(i, k, g, G, state):
+        """Update scheme
+
+        Args:
+            i (_type_): _description_
+            k (_type_): _description_
+            g (_type_): _description_
+            G (_type_): p-dim array, representing a diagonal preconditioner matrix
+            state (_type_): _description_
+
+        Returns:
+            _type_: _description_
+        """
+        x = state
+        return (
+            x
+            + dt(i) * 0.5 * G * g
+            + jnp.sqrt(dt(i) * G) @ random.normal(k, shape=jnp.shape(x))
+        )
+
+    def get_params(state):
+        x = state
+        return x
+
+    return init_fn, update, get_params
+
+@diffusion_pgsgld
+def psgnht(dt, a: float = 0.01) -> Tuple[Callable, Callable, Callable]:
+    """Euler solver for the SG-NHT diffusion
+    See algorithm 2 in http://people.ee.duke.edu/~lcarin/sgnht-4.pdf
+
+    Args:
+        dt (float): step size
+        a (float, optional): diffusion factor. Defaults to 0.01.
+
+    Returns:
+        Tuple[Callable, Callable, Callable]: An (init_fun, update_fun, get_params) triple.
+    """
+    dt = make_schedule(dt)
+
+    def init_fn(x):
+        v = jnp.zeros_like(x)
+        alpha = a
+        return x, v, alpha
+
+    def initial_momentum(kv):
+        "sample momentum at the first iteration"
+        k, v = kv
+        key, subkey = random.split(k)
+        v = jnp.sqrt(dt(0)) * random.normal(subkey, shape=v.shape)
+        return key, v
+
+    def update(i, k, g, G, state):
+        x, v, alpha = state
+        k, v = lax.cond(i == 0, initial_momentum, lambda kv: (k, v), (k, v))
+        v = (
+            v
+            - alpha * v
+            + dt(i) * G * g
+            + jnp.sqrt(2 * a * dt(i) * G) * random.normal(k, shape=jnp.shape(x))
+        )
+        x = x + v
+        alpha = alpha + (jnp.linalg.norm(v) ** 2) / v.size - dt(i)
+        return x, v, alpha
+
+    def get_params(state):
+        x, _, _ = state
+        return x
+
+    return init_fn, update, get_params
 
 @diffusion
 def psgld(
