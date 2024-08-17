@@ -93,23 +93,11 @@ def pgsgld(
         return x
 
     def update(i, k, g, G, state):
-        """Update scheme
-
-        Args:
-            i (_type_): _description_
-            k (_type_): _description_
-            g (_type_): _description_
-            G (_type_): p-dim array, representing a diagonal preconditioner matrix
-            state (_type_): _description_
-
-        Returns:
-            _type_: _description_
-        """
         x = state
         return (
             x
             + dt(i) * 0.5 * G * g
-            + jnp.sqrt(dt(i) * G) @ random.normal(k, shape=jnp.shape(x))
+            + jnp.sqrt(dt(i) * G) * random.normal(k, shape=jnp.shape(x))
         )
 
     def get_params(state):
